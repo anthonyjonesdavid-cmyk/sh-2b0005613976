@@ -73,6 +73,14 @@ main{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch}
 #toast{position:fixed;left:50%;top:calc(64px + var(--sat));transform:translateX(-50%);background:#2b2b33;border:1px solid #444;color:var(--fg);padding:12px 16px;border-radius:12px;z-index:30;max-width:min(92vw,560px);font-size:15px;line-height:1.45;box-shadow:0 6px 24px #000a}
 .gdmsg{color:var(--fg);font-size:15px;line-height:1.45;margin:0 4px 4px}.gdrows{display:flex;flex-direction:column;gap:8px;max-height:55vh;overflow-y:auto}.gdrow{background:#24242a;border-radius:10px;padding:8px 10px}.gdt{display:flex;justify-content:space-between;gap:10px;font-size:14px}.gdt span{color:var(--dim);text-align:right}.gdrow.err .gdt span{color:#ff8a80}.gdrow.done .gdt span{color:var(--ok)}.gdbar{height:6px;background:#33333b;border-radius:3px;margin-top:6px;overflow:hidden}.gdbar i{display:block;height:100%;width:0;background:var(--gold);transition:width .2s}.gdrow.done .gdbar i{background:var(--ok)}
 @media (max-width:500px){.nw{display:none}header #addall{padding:0 10px}}
+body.rd #hdr{position:fixed;top:0;left:0;right:0;z-index:6}
+body.rd #player,body.rd #noaudio{position:fixed;left:0;right:0;bottom:0;z-index:6}
+body.rd #text{padding-top:calc(70px + var(--sat))}
+body.rd::before{content:"";position:fixed;top:0;left:0;right:0;height:var(--sat);background:var(--bg);z-index:7}
+#hdr,#player{transition:opacity .45s ease,visibility .45s}
+body.rd.immersive #hdr,body.rd.immersive #player{opacity:0;visibility:hidden;pointer-events:none}
+body.rd.immersive #follow{bottom:calc(24px + var(--sab))}
+#follow{transition:bottom .45s ease}
 #busy{position:fixed;inset:0;background:#000b;z-index:40;display:flex;align-items:center;justify-content:center;font-size:17px}
 </style>
 </head>
@@ -227,7 +235,7 @@ async function fromDrive(onlyId){
  finally{GD.running=false;await refreshHave();if(cur&&onlyId&&HAVE[onlyId]&&cur.id===onlyId)openStory(onlyId,true)}
 }
 // ---------- library ----------
-function renderLib(){
+function renderLib(){document.body.classList.remove("rd","immersive");clearTimeout(hideT);
  cur=null;document.title="Sherlock Read-Along";
  $("#hdr").innerHTML=`<h1>Sherlock Holmes <small>Read-Along</small></h1><button id="gdall" aria-label="Get from Google Drive">Get from <span class="nw">Google </span>Drive</button><button class="gold" id="addall">＋ Add audio files</button>`;
  $("#gdall").onclick=()=>fromDrive();
@@ -247,7 +255,7 @@ async function openStory(id,keepPos){
  const s=LIB.find(x=>x.id===id);if(!s)return renderLib();
  if(cur&&cur.id!==id){audio.pause()}
  const d=await (await fetch(`data/${id}.json`)).json();
- cur={...s,...d};T=d.t;document.title=s.title;
+ cur={...s,...d};document.body.classList.add("rd");document.body.classList.remove("immersive");T=d.t;document.title=s.title;
  $("#hdr").innerHTML=`<button id="back" aria-label="Library">‹ Library</button><h1>${esc(s.title)}</h1><button id="aa" aria-label="Text size">Aa</button>`;
  $("#back").onclick=()=>{save();audio.pause();history.replaceState(null,"","#");renderLib()};
  $("#aa").onclick=textSheet;
@@ -269,7 +277,7 @@ async function openStory(id,keepPos){
  $("#main").scrollTop=0;follow=true;
  const sc=$("#main");const stop=()=>{if(!audio.paused||on>=0){follow=false;showFollow()}};
  sc.ontouchmove=stop;sc.onwheel=stop;
- $("#text").onclick=e=>{const sp=e.target.closest("span");if(!sp||!HAVE[id])return;const i=spans.indexOf(sp);audio.currentTime=T[i]/100+0.01;follow=true;showFollow();mark(true);audio.play().catch(()=>{})};
+ $("#text").onclick=e=>{if(barsHidden()){showBars();return}const sp=e.target.closest("span");if(!sp||!HAVE[id]){if(!audio.paused){clearTimeout(hideT);document.body.classList.add("immersive")}return}showBars();const i=spans.indexOf(sp);audio.currentTime=T[i]/100+0.01;follow=true;showFollow();mark(true);audio.play().catch(()=>{})};
  if(keepPos)mark(true);
 }
 function textSheet(){const sizes=[18,20,23,26,30,34];const curS=+(localStorage.getItem("fs")||23);sheet(`<h3>Text size</h3><div class="row">${sizes.map(x=>`<button data-fs="${x}" class="${x===curS?"sel":""}" style="font-family:Georgia;font-size:${Math.round(x*.75)}px">Aa</button>`).join("")}</div>`,e=>{const b=e.target.closest("[data-fs]");if(b){localStorage.setItem("fs",b.dataset.fs);document.documentElement.style.setProperty("--fs",b.dataset.fs+"px");mark(true);return true}})}
@@ -282,11 +290,16 @@ function renderPlayer(){
  $("#f15").onclick=()=>{audio.currentTime=Math.min(cur.duration,audio.currentTime+15);follow=true;mark(true)};
  $("#spd").onclick=()=>{const R=[0.75,0.9,1,1.1,1.25,1.5,1.75,2];sheet(`<h3>Speed</h3><div class="row">${R.map(r=>`<button data-r="${r}" class="${r===audio.playbackRate?"sel":""}">${r}×</button>`).join("")}</div>`,e=>{const b=e.target.closest("[data-r]");if(b){audio.playbackRate=+b.dataset.r;localStorage.setItem("rate",b.dataset.r);$("#spd").textContent=b.dataset.r+"×";return true}})};
  $("#slp").onclick=()=>sheet(`<h3>Sleep timer</h3><div class="row">${[["Off",0],["5 min",5],["15 min",15],["30 min",30],["45 min",45],["60 min",60],["End of story",-1]].map(([l,m])=>`<button data-m="${m}">${l}</button>`).join("")}</div>`,e=>{const b=e.target.closest("[data-m]");if(!b)return;const m=+b.dataset.m;sleepEnd=m===-1;sleepAt=m>0?Date.now()+m*60000:0;slpLabel();return true});
- const sk=$("#sk");sk.oninput=()=>{$("#tc").textContent=fmt(sk.value)};sk.onchange=()=>{audio.currentTime=+sk.value;follow=true;mark(true)};
+ const sk=$("#sk");sk.oninput=()=>{$("#tc").textContent=fmt(sk.value)};sk.onpointerdown=sk.ontouchstart=()=>{scrubbing=true;showBars()};sk.onpointerup=sk.ontouchend=sk.onblur=()=>{scrubbing=false;armHide()};sk.onchange=()=>{scrubbing=false;armHide();audio.currentTime=+sk.value;follow=true;mark(true)};
  $("#follow").onclick=()=>{follow=true;showFollow();mark(true)};
  slpLabel();playBtn();
 }
 function slpLabel(){const b=$("#slp");if(!b)return;b.textContent=sleepAt?`☾ ${Math.max(1,Math.ceil((sleepAt-Date.now())/60000))}m`:sleepEnd?"☾ End":"☾ Sleep";b.style.color=sleepAt||sleepEnd?"var(--gold)":""}
+let hideT=0,scrubbing=false;
+const barsHidden=()=>document.body.classList.contains("immersive");
+function armHide(){clearTimeout(hideT);if(!cur||audio.paused)return;hideT=setTimeout(()=>{if(!cur||audio.paused)return;if(scrubbing||document.querySelector(".sheet"))return armHide();document.body.classList.add("immersive")},3000)}
+function showBars(){document.body.classList.remove("immersive");armHide()}
+document.addEventListener("pointerdown",e=>{if(cur&&e.target.closest("#hdr,#player,.sheet"))showBars()},true);
 function showFollow(){const f=$("#follow");if(f)f.classList.toggle("hidden",follow)}
 function playBtn(){const b=$("#play");if(b){b.textContent=audio.paused?"▶":"❚❚";b.setAttribute("aria-label",audio.paused?"Play":"Pause")}}
 function idxAt(t){let lo=0,hi=T.length-1,c=t*100;if(c<T[0])return -1;while(lo<hi){const m=(lo+hi+1)>>1;if(T[m]<=c)lo=m;else hi=m-1}return lo}
@@ -298,8 +311,8 @@ function mark(force){
 }
 function loop(){if(!audio.paused){mark();requestAnimationFrame(loop)}}
 function save(){if(cur&&HAVE[cur.id]&&audio.currentTime>0)localStorage.setItem("pos:"+cur.id,audio.currentTime.toFixed(1))}
-audio.addEventListener("play",()=>{playBtn();requestAnimationFrame(loop);if(navigator.mediaSession)navigator.mediaSession.playbackState="playing"});
-audio.addEventListener("pause",()=>{playBtn();save();mark();if(navigator.mediaSession)navigator.mediaSession.playbackState="paused"});
+audio.addEventListener("play",()=>{armHide();playBtn();requestAnimationFrame(loop);if(navigator.mediaSession)navigator.mediaSession.playbackState="playing"});
+audio.addEventListener("pause",()=>{clearTimeout(hideT);document.body.classList.remove("immersive");playBtn();save();mark();if(navigator.mediaSession)navigator.mediaSession.playbackState="paused"});
 audio.addEventListener("timeupdate",()=>{if(sleepAt&&Date.now()>=sleepAt){sleepAt=0;audio.pause();slpLabel()}else slpLabel();if(++saveTick%16==0)save();if(document.hidden)return;if(audio.paused)mark()});
 audio.addEventListener("ended",()=>{if(cur)localStorage.setItem("pos:"+cur.id,"0");sleepEnd=false;slpLabel()});
 audio.playbackRate=+(localStorage.getItem("rate")||1);audio.addEventListener("loadedmetadata",()=>{audio.playbackRate=+(localStorage.getItem("rate")||1)});
