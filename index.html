@@ -43,7 +43,7 @@ main{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch}
 .card .prog{height:4px;background:#33333b;border-radius:2px;overflow:hidden}
 .card .prog i{display:block;height:100%;background:var(--gold)}
 .card .act{margin-top:auto;display:flex;gap:6px}
-.card .act button{flex:1;font-size:14px;min-height:40px;padding:0 8px}
+.card .act{flex-wrap:wrap}.card .act [data-gd]{flex-basis:100%;order:2}.card .act button{white-space:nowrap;flex:1;font-size:14px;min-height:40px;padding:0 8px}
 .ok{color:var(--ok)}
 .foot{color:var(--dim);font-size:12.5px;margin:22px 2px 0;line-height:1.5}
 /* reader */
@@ -71,6 +71,8 @@ main{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch}
 .sheet .row button{flex:1 1 30%}
 .sheet button.sel{outline:2px solid var(--gold)}
 #toast{position:fixed;left:50%;top:calc(64px + var(--sat));transform:translateX(-50%);background:#2b2b33;border:1px solid #444;color:var(--fg);padding:12px 16px;border-radius:12px;z-index:30;max-width:min(92vw,560px);font-size:15px;line-height:1.45;box-shadow:0 6px 24px #000a}
+.gdmsg{color:var(--fg);font-size:15px;line-height:1.45;margin:0 4px 4px}.gdrows{display:flex;flex-direction:column;gap:8px;max-height:55vh;overflow-y:auto}.gdrow{background:#24242a;border-radius:10px;padding:8px 10px}.gdt{display:flex;justify-content:space-between;gap:10px;font-size:14px}.gdt span{color:var(--dim);text-align:right}.gdrow.err .gdt span{color:#ff8a80}.gdrow.done .gdt span{color:var(--ok)}.gdbar{height:6px;background:#33333b;border-radius:3px;margin-top:6px;overflow:hidden}.gdbar i{display:block;height:100%;width:0;background:var(--gold);transition:width .2s}.gdrow.done .gdbar i{background:var(--ok)}
+@media (max-width:500px){.nw{display:none}header #addall{padding:0 10px}}
 #busy{position:fixed;inset:0;background:#000b;z-index:40;display:flex;align-items:center;justify-content:center;font-size:17px}
 </style>
 </head>
@@ -140,18 +142,103 @@ async function refreshHave(){HAVE={};for(const k of await listAudio())HAVE[k]=1}
 $("#file").addEventListener("change",e=>{const f=e.target.files;addFiles(f).finally(()=>e.target.value="")});
 function pick(forId){pendingFor=forId||null;$("#file").multiple=!forId;$("#file").click()}
 try{navigator.storage&&navigator.storage.persist&&navigator.storage.persist()}catch(e){}
+// ---------- Google Drive download (drive.readonly; token kept in memory only; audio goes Drive -> this device, never uploaded) ----------
+const GD={CID:"183934120007-49hgfavrkltjo02tr78tmn08mb7g3v3r.apps.googleusercontent.com",HINT:"anthonyjonesdavid@gmail.com",SCOPE:"https://www.googleapis.com/auth/drive.readonly",
+ API:window.__shDriveApi||"https://www.googleapis.com",FOLDER:"0ByhXYqPJBamsfndNVVd0WjJZRVBmbHpVNEtzOFlZM2hzY05SYWZLdlJzRUhGS0RFeWdvZVU",
+ STALL:window.__shDriveStall||30000,RETRIES:5,tok:null,exp:0,client:null,files:null,running:false,rows:{}};
+const loadScript=src=>new Promise((ok,no)=>{if(document.querySelector(`script[src="${src}"]`)&&window.google&&google.accounts)return ok();const s=document.createElement("script");s.src=src;s.onload=ok;s.onerror=()=>no(new Error("Couldn't reach Google. Check the internet connection."));document.head.append(s)});
+function gdToken(){
+ if(window.__shDriveToken)return Promise.resolve(window.__shDriveToken);
+ if(GD.tok&&Date.now()<GD.exp)return Promise.resolve(GD.tok);
+ return loadScript("https://accounts.google.com/gsi/client").then(()=>new Promise((ok,no)=>{
+  GD.client=google.accounts.oauth2.initTokenClient({client_id:GD.CID,scope:GD.SCOPE,login_hint:GD.HINT,
+   callback:r=>{if(r.error)return no(new Error(r.error==="access_denied"?"Google sign-in was cancelled.":"Google sign-in failed: "+r.error));
+    if(!google.accounts.oauth2.hasGrantedAllScopes(r,GD.SCOPE))return no(new Error("Drive access wasn't granted. Tick the Google Drive permission when signing in."));
+    GD.tok=r.access_token;GD.exp=Date.now()+(r.expires_in-120)*1000;ok(GD.tok)},
+   error_callback:e=>no(new Error(e&&e.type==="popup_closed"?"The Google sign-in window was closed.":e&&e.type==="popup_failed_to_open"?"The Google sign-in window was blocked. Allow pop-ups and try again.":"Google sign-in didn't finish."))});
+  GD.client.requestAccessToken({prompt:""});
+ }));
+}
+async function gdJSON(path,rk){const t=await gdToken();const h={Authorization:"Bearer "+t};if(rk)h["X-Goog-Drive-Resource-Keys"]=rk;
+ const r=await fetch(GD.API+path,{headers:h});if(r.status===401){GD.tok=null;throw new Error("Google sign-in expired. Tap Get from Google Drive again.")}
+ if(!r.ok)throw new Error("Drive answered "+r.status);return r.json()}
+const F="files(id,name,size,mimeType,resourceKey)";
+async function gdList(){
+ if(GD.files)return GD.files;
+ let folders=[];try{folders=(await gdJSON(`/drive/v3/files?q=${encodeURIComponent("name = 'Sherlock Holmes' and mimeType = 'application/vnd.google-apps.folder' and trashed = false")}&fields=files(id,resourceKey)&pageSize=10`)).files||[]}catch(e){if(/expired|sign-in/.test(e.message))throw e}
+ if(!folders.some(f=>f.id===GD.FOLDER))folders.unshift({id:GD.FOLDER});
+ let all=[];
+ for(const fo of folders){try{const rk=fo.resourceKey?`${fo.id}/${fo.resourceKey}`:"";let pt="";do{const j=await gdJSON(`/drive/v3/files?q=${encodeURIComponent(`'${fo.id}' in parents and trashed = false`)}&fields=nextPageToken,${F}&pageSize=200${pt?"&pageToken="+pt:""}`,rk);all.push(...(j.files||[]));pt=j.nextPageToken||""}while(pt)}catch(e){if(/expired/.test(e.message))throw e}}
+ if(!all.length){const j=await gdJSON(`/drive/v3/files?q=${encodeURIComponent("mimeType contains 'audio/' and trashed = false")}&fields=${F}&pageSize=500`);all=j.files||[]}
+ return GD.files=gdMatch(all)}
+// file name -> story; skip copy-protected Five Orange Pips; prefer .m4a/.mp3 over .aac (the synced recordings)
+function gdMatch(files){const out={};const rank=n=>/\.aac$/i.test(n)?1:0;
+ for(const f of files){if(/orange\s*pips/i.test(f.name)||/\.m4p$/i.test(f.name))continue;if(!/^audio\/|\.(m4a|mp3|aac|m4b)$/i.test(f.mimeType+" "+f.name)&&!/\.(m4a|mp3|aac|m4b)$/i.test(f.name))continue;
+  const k=key(f.name.replace(/\.[^.]+$/,""));const s=LIB.find(x=>k===key(x.title))||LIB.find(x=>k.includes(key(x.title))&&k.length<key(x.title).length+8);if(!s)continue;
+  if(!out[s.id]||rank(f.name)<rank(out[s.id].name))out[s.id]=f}
+ return out}
+// stream one file into a Blob; on a drop, resume from the last byte with a Range request
+async function gdDownload(f,onp){
+ const size=+f.size||0,parts=[];let got=0,tries=0;
+ while(true){
+  const h={Authorization:"Bearer "+await gdToken()};if(f.resourceKey)h["X-Goog-Drive-Resource-Keys"]=`${f.id}/${f.resourceKey}`;if(got)h.Range=`bytes=${got}-`;
+  const ac=new AbortController();let stall;const arm=()=>{clearTimeout(stall);stall=setTimeout(()=>ac.abort(),GD.STALL)};
+  try{arm();const r=await fetch(`${GD.API}/drive/v3/files/${f.id}?alt=media&supportsAllDrives=true`,{headers:h,signal:ac.signal});
+   if(r.status===401){GD.tok=null;throw Object.assign(new Error("auth"),{retry:true})}
+   if(r.status===403||r.status===404)throw new Error(r.status===404?"Not found in Drive (it may need re-sharing).":"Drive refused the download ("+r.status+").");
+   if(!r.ok)throw Object.assign(new Error("Drive answered "+r.status),{retry:true});
+   if(got&&r.status!==206){parts.length=0;got=0}
+   const rd=r.body.getReader();
+   for(;;){const {done,value}=await rd.read();if(done)break;arm();parts.push(value);got+=value.length;onp(got,size)}
+   clearTimeout(stall);
+   if(size&&got<size)throw Object.assign(new Error("short"),{retry:true});
+   return new Blob(parts,{type:/\.mp3$/i.test(f.name)?"audio/mpeg":/\.aac$/i.test(f.name)?"audio/aac":"audio/mp4"});
+  }catch(e){clearTimeout(stall);if(!(e.retry||e.name==="AbortError"||e instanceof TypeError)||++tries>GD.RETRIES)throw e;
+   onp(got,size,document.hidden?"Paused while the iPad is locked. It resumes when you come back.":`Connection dropped, resuming (try ${tries} of ${GD.RETRIES})…`);
+   if(document.hidden)await new Promise(ok=>document.addEventListener("visibilitychange",function v(){if(!document.hidden){document.removeEventListener("visibilitychange",v);ok()}}));
+   else await new Promise(ok=>setTimeout(ok,1500*tries))}
+ }}
+const mb=b=>(b/1048576).toFixed(b<1048576*10?1:0)+" MB";
+function gdSheet(){let s=$("#gdsheet");if(!s){s=document.createElement("div");s.id="gdsheet";s.className="sheet";s.innerHTML=`<div class="box gd"><h3>Get from Google Drive</h3><div id="gdmsg" class="gdmsg"></div><div id="gdrows" class="gdrows"></div><div class="row"><button id="gdclose">Close</button></div></div>`;document.body.append(s);$("#gdclose").onclick=()=>{s.remove();if(!cur)renderLib()}}return s}
+function gdRow(s,state,pct,note){let r=GD.rows[s.id];const box=$("#gdrows");if(!box)return;if(!r||!r.isConnected){r=document.createElement("div");r.className="gdrow";r.innerHTML=`<div class="gdt"><b></b><span></span></div><div class="gdbar"><i></i></div>`;box.append(r);GD.rows[s.id]=r}
+ r.querySelector("b").textContent=s.title;r.querySelector("span").textContent=note||"";r.querySelector("i").style.width=(pct||0)+"%";r.className="gdrow "+state}
+const gdMsg=h=>{const m=$("#gdmsg");if(m)m.innerHTML=h};
+async function fromDrive(onlyId){
+ if(GD.running){gdSheet();return}GD.running=true;GD.rows={};gdSheet();
+ gdMsg(`Signing in to Google… If nothing opens, allow pop-ups for this site.`);
+ let ok=0,fail=0,skipped=0;
+ try{
+  await gdToken();gdMsg("Looking in your Sherlock Holmes folder…");
+  const m=await gdList();const ids=onlyId?[onlyId]:LIB.map(s=>s.id);
+  const todo=ids.filter(id=>{if(HAVE[id]&&!onlyId){skipped++;return false}return true});
+  const missing=todo.filter(id=>!m[id]);const go=todo.filter(id=>m[id]);
+  if(!go.length){gdMsg(onlyId?`Couldn't find this story's file in your Drive folder. Use <b>＋ Audio</b> instead.`:skipped?`All ${skipped} stories with files in Drive are already on this device.`:"No matching story files were found in Drive.");return}
+  gdMsg(`Downloading ${go.length} ${go.length>1?"files":"file"} (${mb(go.reduce((a,id)=>a+(+m[id].size||0),0))}). Keep the app open and the screen on.${skipped?` ${skipped} already on this device.`:""}${missing.length&&!onlyId?` Not in Drive: ${missing.length}.`:""}`);
+  for(const id of go){const s=LIB.find(x=>x.id===id);gdRow(s,"wait",0,"Waiting")}
+  for(const id of go){const s=LIB.find(x=>x.id===id),f=m[id];
+   try{gdRow(s,"run",0,"Starting…");
+    const blob=await gdDownload(f,(g,t,note)=>gdRow(s,"run",t?100*g/t:0,note||`${mb(g)}${t?" of "+mb(t):""}`));
+    gdRow(s,"run",100,"Saving…");
+    try{await putAudio(id,{blob,name:f.name,type:blob.type,size:blob.size})}catch(e){await putAudio(id,{buf:await blob.arrayBuffer(),name:f.name,type:blob.type,size:blob.size})}
+    HAVE[id]=1;ok++;gdRow(s,"done",100,"✓ Saved")}
+   catch(e){fail++;gdRow(s,"err",0,"Failed: "+(e.message||e)+" Tap Get from Google Drive to retry.")}}
+  gdMsg(`<b class="ok">${ok} saved</b>${fail?`, ${fail} failed (tap Get from Google Drive again to retry just those)`:""}. Audio stays on this device.`);
+ }catch(e){gdMsg(`<b>${esc(String(e.message||e))}</b>`)}
+ finally{GD.running=false;await refreshHave();if(cur&&onlyId&&HAVE[onlyId]&&cur.id===onlyId)openStory(onlyId,true)}
+}
 // ---------- library ----------
 function renderLib(){
  cur=null;document.title="Sherlock Read-Along";
- $("#hdr").innerHTML=`<h1>Sherlock Holmes <small>Read-Along</small></h1><button class="gold" id="addall">＋ Add audio files</button>`;
+ $("#hdr").innerHTML=`<h1>Sherlock Holmes <small>Read-Along</small></h1><button id="gdall" aria-label="Get from Google Drive">Get from <span class="nw">Google </span>Drive</button><button class="gold" id="addall">＋ Add audio files</button>`;
+ $("#gdall").onclick=()=>fromDrive();
  $("#addall").onclick=()=>pick();
  const n=Object.keys(HAVE).length;
- $("#main").innerHTML=`<div id="lib">${n<LIB.length?`<div class="help"><p><b>Add your audiobooks once.</b> Tap <b>＋ Add audio files</b>, choose <b>Browse</b>, open the folder with your Sherlock Holmes files, tap <b>Select</b>, pick them all, then tap <b>Open</b>. Each file is matched to its story by name and saved on this ${/iPad/.test(navigator.userAgent)||innerWidth>700?"iPad":"device"}. ${n?`${n} of ${LIB.length} added.`:""}</p><button class="gold" id="addall2">＋ Add audio files</button></div>`:""}
+ $("#main").innerHTML=`<div id="lib">${n<LIB.length?`<div class="help"><p><b>Add your audiobooks once.</b> Tap <b>Get from Google Drive</b> to download them straight from your Drive folder, or tap <b>＋ Add audio files</b>, choose <b>Browse</b>, open the folder with your Sherlock Holmes files, tap <b>Select</b>, pick them all, then tap <b>Open</b>. Each file is matched to its story by name and saved on this ${/iPad/.test(navigator.userAgent)||innerWidth>700?"iPad":"device"}. ${n?`${n} of ${LIB.length} added.`:""}</p><button id="gdall2">Get from Google Drive</button><button class="gold" id="addall2">＋ Add audio files</button></div>`:""}
  <div class="grid">${LIB.map((s,i)=>{const p=pos(s.id),pc=Math.min(100,100*p/s.duration);return `<div class="card"><button class="cv" data-open="${s.id}" aria-label="Open ${esc(s.title)}">${cover(s,i)}</button><div class="meta"><div class="t">${esc(s.title)}</div><div class="s">${esc(s.book.replace("Sherlock Holmes","S.H."))} · ${fmt(s.duration)}</div>${p>5?`<div class="prog"><i style="width:${pc}%"></i></div>`:""}
- <div class="act">${HAVE[s.id]?`<button class="gold" data-open="${s.id}">${p>5?"▶ Resume "+fmt(p):"▶ Play"}</button>`:`<button data-open="${s.id}">Read</button><button class="gold" data-add="${s.id}">＋ Audio</button>`}</div></div></div>`}).join("")}</div>
+ <div class="act">${HAVE[s.id]?`<button class="gold" data-open="${s.id}">${p>5?"▶ Resume "+fmt(p):"▶ Play"}</button>`:`<button data-open="${s.id}">Read</button><button data-gd="${s.id}">From Drive</button><button class="gold" data-add="${s.id}">＋ Audio</button>`}</div></div></div>`}).join("")}</div>
  <p class="foot">Text: Project Gutenberg (public domain in the US). Your audio stays on this device and is never uploaded. Five Orange Pips isn't here because its file is copy-protected and can't be synced.</p></div>`;
- const a2=$("#addall2");if(a2)a2.onclick=()=>pick();
- $("#main").onclick=e=>{const o=e.target.closest("[data-open]"),a=e.target.closest("[data-add]");if(a)pick(a.dataset.add);else if(o)openStory(o.dataset.open)};
+ const a2=$("#addall2");if(a2)a2.onclick=()=>pick();const g2=$("#gdall2");if(g2)g2.onclick=()=>fromDrive();
+ $("#main").onclick=e=>{const o=e.target.closest("[data-open]"),a=e.target.closest("[data-add]"),g=e.target.closest("[data-gd]");if(g)fromDrive(g.dataset.gd);else if(a)pick(a.dataset.add);else if(o)openStory(o.dataset.open)};
  $("#foot").innerHTML="";
 }
 // ---------- reader ----------
@@ -177,7 +264,7 @@ async function openStory(id,keepPos){
   renderPlayer();mediaSession();
  }else{
   $("#text").classList.add("nosync");
-  $("#foot").innerHTML=`<div id="noaudio"><span>No audio on this device for this story yet.</span><button class="gold" id="add1">＋ Add audio for this story</button></div>`;$("#add1").onclick=()=>pick(id);
+  $("#foot").innerHTML=`<div id="noaudio"><span>No audio on this device for this story yet.</span><button id="gd1">From Google Drive</button><button class="gold" id="add1">＋ Add audio for this story</button></div>`;$("#add1").onclick=()=>pick(id);$("#gd1").onclick=()=>fromDrive(id);
  }
  $("#main").scrollTop=0;follow=true;
  const sc=$("#main");const stop=()=>{if(!audio.paused||on>=0){follow=false;showFollow()}};
