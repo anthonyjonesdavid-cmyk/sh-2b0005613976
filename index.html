@@ -272,8 +272,8 @@ async function openStory(id,keepPos){
   $("#foot").innerHTML=`<div id="noaudio"><span>No audio on this device for this story yet.</span><button id="gd1">From Google Drive</button><button class="gold" id="add1">＋ Add audio for this story</button></div>`;$("#add1").onclick=()=>pick(id);$("#gd1").onclick=()=>fromDrive(id);
  }
  $("#main").scrollTop=0;follow=true;
- const sc=$("#main");const stop=()=>{if(!audio.paused||on>=0){follow=false;showFollow()}};
- sc.ontouchmove=stop;sc.onwheel=stop;
+ const sc=$("#main");let ty=null;const stop=()=>{if(!audio.paused||on>=0){follow=false;anim=0;showFollow();clearTimeout(resumeT);resumeT=setTimeout(()=>{if(!follow){follow=true;showFollow();mark(true)}},4000)}};
+ sc.ontouchstart=e=>{ty=e.touches[0].clientY};sc.ontouchmove=e=>{if(ty!==null&&Math.abs(e.touches[0].clientY-ty)>12){ty=null;stop()}};sc.ontouchend=()=>{ty=null};sc.onwheel=stop;
  let tapT=0,lastSp=null;
  $("#text").onclick=e=>{if(!HAVE[id])return;const sp=e.target.closest("span");
   if(tapT&&(lastSp||sp)){const t=lastSp||sp;clearTimeout(tapT);tapT=0;lastSp=null;const i=spans.indexOf(t);audio.currentTime=T[i]/100+0.01;follow=true;showFollow();mark(true);return}
@@ -308,12 +308,14 @@ function idxAt(t){let lo=0,hi=T.length-1,c=t*100;if(c<T[0])return -1;while(lo<hi
 function mark(force){
  if(!cur||!spans.length)return;const i=idxAt(audio.currentTime);
  if(i!==on){if(on>=0&&spans[on])spans[on].classList.remove("on");on=i;if(i>=0)spans[i].classList.add("on")}
- if(i>=0&&follow){const sc=$("#main"),r=spans[i].getBoundingClientRect(),h=sc.getBoundingClientRect();const y=r.top-h.top;if(force||y<h.height*.15||y>h.height*.6){sc.scrollTo({top:sc.scrollTop+y-h.height*.3,behavior:force?"auto":"smooth"})}}
+ if(i>=0&&follow){const sc=$("#main"),r=spans[i].getBoundingClientRect(),h=sc.getBoundingClientRect();const y=r.top-h.top;if(force||y<h.height*.12||y+r.height>h.height*.62){const to=Math.max(0,Math.min(sc.scrollHeight-sc.clientHeight,sc.scrollTop+y-h.height*.3));if(force){anim=0;sc.scrollTop=to}else if(!anim||Math.abs(anim.to-to)>4)scrollAnim(sc,to)}}
  const sk=$("#sk");if(sk&&document.activeElement!==sk){sk.value=audio.currentTime;$("#tc").textContent=fmt(audio.currentTime);$("#tr").textContent="−"+fmt(cur.duration-audio.currentTime)}
 }
+let anim=0,resumeT=0;
+function scrollAnim(sc,to){const from=sc.scrollTop,t0=performance.now(),a={to};anim=a;const st=n=>{if(anim!==a||!follow)return;const k=Math.min(1,(n-t0)/450),e=1-Math.pow(1-k,3);sc.scrollTop=from+(to-from)*e;if(k<1)requestAnimationFrame(st);else anim=0};requestAnimationFrame(st)}
 function loop(){if(!audio.paused){mark();requestAnimationFrame(loop)}}
 function save(){if(cur&&HAVE[cur.id]&&audio.currentTime>0)localStorage.setItem("pos:"+cur.id,audio.currentTime.toFixed(1))}
-audio.addEventListener("play",()=>{playBtn();requestAnimationFrame(loop);if(navigator.mediaSession)navigator.mediaSession.playbackState="playing"});
+audio.addEventListener("play",()=>{playBtn();follow=true;showFollow();mark(true);requestAnimationFrame(loop);if(navigator.mediaSession)navigator.mediaSession.playbackState="playing"});
 audio.addEventListener("pause",()=>{playBtn();save();mark();if(navigator.mediaSession)navigator.mediaSession.playbackState="paused"});
 audio.addEventListener("timeupdate",()=>{if(sleepAt&&Date.now()>=sleepAt){sleepAt=0;audio.pause();slpLabel()}else slpLabel();if(++saveTick%16==0)save();if(document.hidden)return;if(audio.paused)mark()});
 audio.addEventListener("ended",()=>{if(cur)localStorage.setItem("pos:"+cur.id,"0");sleepEnd=false;slpLabel()});
